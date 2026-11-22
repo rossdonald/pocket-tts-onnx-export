@@ -253,7 +253,7 @@ def main():
     torch.manual_seed(42)
     parser = argparse.ArgumentParser(description="Export FlowLM models to ONNX.")
     parser.add_argument("--output_dir", "-o", type=str, default="onnx_models", help="Directory for output ONNX files")
-    parser.add_argument("--language", type=str, default=DEFAULT_LANGUAGE, help="Model language/config name.")
+    parser.add_argument("--language", type=str, default=None, help="Model language/config name.")
     parser.add_argument("--config", type=str, default=None, help="Path to a local YAML config file.")
     parser.add_argument("--exact", action="store_true", help="Require exact torch vs ONNX equality.")
     args = parser.parse_args()
