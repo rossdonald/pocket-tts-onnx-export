@@ -180,34 +180,29 @@ class SimpleMLPAdaLN(nn.Module):
 
         flow_dim = config.dim
         flow_depth = config.depth
-        num_time_conds = 2
+        num_time_conds = 0 if config.type == "drifting" else 2
         return SimpleMLPAdaLN(
             latent_dim, flow_dim, latent_dim, cond_dim, flow_depth, num_time_conds=num_time_conds
         )
 
     def forward(
-        self, c: torch.Tensor, s: torch.Tensor, t: torch.Tensor, x: torch.Tensor
+        self, c: torch.Tensor, *args: torch.Tensor
     ) -> torch.Tensor:
         """
         Apply the model to an input batch.
         :param c: conditioning from AR transformer.
-        :param s: start time tensor.
-        :param t: target time tensor.
-        :param x: an [N x C] Tensor of inputs.
+        :param args: `num_time_conds` time tensors, then an [N x C] Tensor of inputs.
+            The lsd sampler passes a start and a target time, drifting passes none.
         :return: an [N x C] Tensor of outputs.
         """
-        # Combine time conditions
-        ts = [s, t]
-        x = self.input_proj(x)
+        ts, x = args[:-1], args[-1]
         assert len(ts) == self.num_time_conds, (
             f"Expected {self.num_time_conds} time conditions, got {len(ts)}"
         )
-        assert self.num_time_conds != 1
-        t_combined = (
-            sum(self.time_embed[i](ts[i]) for i in range(self.num_time_conds)) / self.num_time_conds
-        )
-        c = self.cond_embed(c)
-        y = t_combined + c
+        x = self.input_proj(x)
+        y = self.cond_embed(c)
+        if self.num_time_conds:
+            y = y + sum(emb(t) for emb, t in zip(self.time_embed, ts)) / self.num_time_conds
 
         for block in self.res_blocks:
             x = block(x, y)

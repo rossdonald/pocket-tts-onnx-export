@@ -8,7 +8,9 @@ Published exported weights and inference code:
 
 It currently targets:
 
+- `english_18m_2026-10`
 - `english_2026-04`
+- `english_2026-09_2`
 - `french_24l`
 - `german`
 - `german_24l`
@@ -92,6 +94,7 @@ The exporter also writes bundle metadata used by the `pocket-tts-onnx` runtime:
 - state manifests for FlowLM and Mimi
 - sample/frame metadata
 - BOS-before-voice tensor path
+- sampler metadata: `sampler_type`, `sampler_conditioning_dim` and `eos_threshold`
 - preprocessing flags such as `remove_semicolons`
 
 ## Implementation Notes
@@ -104,6 +107,13 @@ FlowLM is exported as two graphs:
 - `flow_lm_flow`: stateless flow-matching step
 
 This keeps the LSD loop in the runtime and allows dynamic step counts and temperature control.
+
+The inputs and output of `flow_lm_flow` depend on the model's `flow_lm.flow.type`, which is written to `bundle.json` as `sampler_type`:
+
+- `lsd`: inputs `c`, `s`, `t` and `x`, output `flow_dir`. The runtime runs the decode loop.
+- `drifting` (used by `english_18m_2026-10`): inputs `c` and `x`, output `latent`. The head returns the sample in one step, so there are no time inputs and no loop.
+
+When a config sets `flow_lm.z_dim`, the backbone output is projected to that width before the sampler and EOS head use it. `bundle.json` records this width as `sampler_conditioning_dim`. `conditioning_dim` stays the transformer width of the `text_embeddings` input.
 
 ### Explicit Stateful I/O
 
@@ -120,6 +130,12 @@ The bundle format preserves the v2 voice-cloning path:
 ### Quantization
 
 Quantization uses `onnxruntime.quantization.quantize_dynamic` and targets `MatMul` operators. This is the safe CPU-oriented path used by this repo.
+
+### Decoder Config and Activation
+
+A config can give the decoder a different architecture from the encoder with `mimi.decoder_seanet` and `mimi.decoder_transformer`. Without them the decoder reuses `mimi.seanet` and `mimi.transformer`.
+
+Feed-forward blocks use the tanh approximation of GELU, matching current upstream `pocket-tts`.
 
 ## Repo Layout
 

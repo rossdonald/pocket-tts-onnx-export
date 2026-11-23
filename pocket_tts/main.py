@@ -22,12 +22,10 @@ except ImportError:
 from pocket_tts.data.audio import stream_audio_chunks
 from pocket_tts.default_parameters import (
     DEFAULT_AUDIO_PROMPT,
-    DEFAULT_EOS_THRESHOLD,
     DEFAULT_FRAMES_AFTER_EOS,
     DEFAULT_LANGUAGE,
     DEFAULT_LSD_DECODE_STEPS,
     DEFAULT_NOISE_CLAMP,
-    DEFAULT_TEMPERATURE,
     MAX_TOKEN_PER_CHUNK,
     get_default_text_for_language,
 )
@@ -219,10 +217,12 @@ def generate(
         int, typer.Option(help="Number of generation steps")
     ] = DEFAULT_LSD_DECODE_STEPS,
     temperature: Annotated[
-        float, typer.Option(help="Temperature for generation")
-    ] = DEFAULT_TEMPERATURE,
+        float | None, typer.Option(help="Temperature for generation", show_default=False)
+    ] = None,
     noise_clamp: Annotated[float, typer.Option(help="Noise clamp value")] = DEFAULT_NOISE_CLAMP,
-    eos_threshold: Annotated[float, typer.Option(help="EOS threshold")] = DEFAULT_EOS_THRESHOLD,
+    eos_threshold: Annotated[
+        float | None, typer.Option(help="EOS threshold", show_default=False)
+    ] = None,
     frames_after_eos: Annotated[
         int | None, typer.Option(help="Number of frames to generate after EOS")
     ] = DEFAULT_FRAMES_AFTER_EOS,

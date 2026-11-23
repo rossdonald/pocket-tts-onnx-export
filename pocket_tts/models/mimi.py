@@ -56,7 +56,7 @@ class MimiModel(nn.Module):
                 int(downsample_stride), dimension=dimension, out_dimension=inner_dim
             )
             self.upsample = ConvTrUpsample1d(
-                int(downsample_stride), dimension=dimension, in_dimension=outer_dim
+                int(downsample_stride), dimension=decoder.dimension, in_dimension=outer_dim
             )
 
     @property

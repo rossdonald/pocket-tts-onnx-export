@@ -108,11 +108,11 @@ class FlowLMMainWrapper(nn.Module):
     """
     Unified Backbone Model for both Conditioning and AR steps.
     Inputs: 
-      - sequence: (B, T, 32)
-      - text_embeddings: (B, Text, 1024)
+      - sequence: (B, T, ldim)
+      - text_embeddings: (B, Text, dim)
       - state_*: KVCache states
     Outputs:
-      - conditioning: (B, 1024) - used for Flow step
+      - conditioning: (B, z_dim, or dim without a projection) - used for Flow step
       - eos_logit: (B, 1) - used for EOS detection
       - out_state_*: Updated states
     """
@@ -175,18 +175,33 @@ class FlowLMMainWrapper(nn.Module):
         return c, eos_logit, *out_state
 
 
+def sample_flow_inputs(flow_lm) -> dict[str, torch.Tensor]:
+    """One random batch for every sampler input. The wrapper picks the ones its sampler uses."""
+    return {
+        "c": torch.randn(1, flow_lm.z_dim),
+        "s": torch.tensor([[0.0]], dtype=torch.float32),
+        "t": torch.tensor([[1.0]], dtype=torch.float32),
+        "x": torch.randn(1, flow_lm.ldim),
+    }
+
+
 class FlowNetWrapper(nn.Module):
     """
-    Stateless wrapper for FlowNet.
-    Inputs: c (conditioning), s (timestep), t (timestep), x (latent)
-    Output: flow_dir
+    Stateless sampler head. The inputs depend on flow_lm.flow_type.
+    lsd takes c (conditioning), s and t (timesteps) and x (latent), and returns flow_dir.
+    drifting takes c and x only, and returns the latent in one step.
     """
+    INPUT_NAMES = {"lsd": ["c", "s", "t", "x"], "drifting": ["c", "x"]}
+    OUTPUT_NAME = {"lsd": "flow_dir", "drifting": "latent"}
+
     def __init__(self, flow_lm):
         super().__init__()
         self.flow_net = flow_lm.flow_net
-        
-    def forward(self, c, s, t, x):
-        return self.flow_net(c, s, t, x)
+        self.input_names = self.INPUT_NAMES[flow_lm.flow_type]
+        self.output_name = self.OUTPUT_NAME[flow_lm.flow_type]
+
+    def forward(self, *args):
+        return self.flow_net(*args)
 
 
 def compare_outputs(name, torch_output, onnx_output, exact: bool):
@@ -230,17 +245,13 @@ def verify_export(tts, structure, flat_state, main_out_path, flow_out_path, exac
     for i, (pt_state, onnx_state) in enumerate(zip(pt_main[2:], onnx_main[2:])):
         compare_outputs(f"FlowLM state {i}", pt_state.numpy(), onnx_state, exact)
 
-    test_c = torch.randn(1, tts.flow_lm.dim)
-    test_s = torch.tensor([[0.0]], dtype=torch.float32)
-    test_t = torch.tensor([[1.0]], dtype=torch.float32)
-    test_x = torch.randn(1, tts.flow_lm.ldim)
+    flow_inputs = sample_flow_inputs(tts.flow_lm)
+    flow_args = [flow_inputs[name] for name in flow_wrapper.input_names]
 
     with torch.no_grad():
-        pt_flow = flow_wrapper(test_c, test_s, test_t, test_x)
-    onnx_flow = ort_flow.run(
-        None,
-        {"c": test_c.numpy(), "s": test_s.numpy(), "t": test_t.numpy(), "x": test_x.numpy()},
-    )[0]
+        pt_flow = flow_wrapper(*flow_args)
+    ort_flow_inputs = {name: value.numpy() for name, value in zip(flow_wrapper.input_names, flow_args)}
+    onnx_flow = ort_flow.run(None, ort_flow_inputs)[0]
     compare_outputs("Flow net output", pt_flow.numpy(), onnx_flow, exact)
     print("FlowLM verification successful.")
 
@@ -297,20 +308,15 @@ def main():
     # 2. Flow Net Model
     print("\nExporting Flow Net Model...")
     flow_wrapper = FlowNetWrapper(tts.flow_lm)
-    # Inputs: c(B, 1024), s(B,1), t(B,1), x(B, 32)
-    dummy_c = torch.randn(1, 1024)
-    dummy_s = torch.tensor([[0.0]])
-    dummy_t = torch.tensor([[1.0]])
-    dummy_x = torch.randn(1, 32)
-    
-    flow_args = (dummy_c, dummy_s, dummy_t, dummy_x)
-    
+    flow_inputs = sample_flow_inputs(tts.flow_lm)
+    flow_args = tuple(flow_inputs[name] for name in flow_wrapper.input_names)
+
     flow_out_path = os.path.join(args.output_dir, "flow_lm_flow.onnx")
     torch.onnx.export(
         flow_wrapper, flow_args, flow_out_path,
-        input_names=["c", "s", "t", "x"],
-        output_names=["flow_dir"],
-        dynamic_axes={"c": {0: "batch"}, "s": {0: "batch"}, "t": {0: "batch"}, "x": {0: "batch"}},
+        input_names=flow_wrapper.input_names,
+        output_names=[flow_wrapper.output_name],
+        dynamic_axes={name: {0: "batch"} for name in flow_wrapper.input_names},
         opset_version=14, dynamo=False
     )
     print(f"Exported {flow_out_path}")

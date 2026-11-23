@@ -66,9 +66,12 @@ class FlowLMModel(nn.Module):
         text_padding_weight: float = 1.0,
         dtype=None,
         insert_bos_before_voice: bool = False,
+        flow_type: str = "lsd",
+        z_dim: int | None = None,
     ):
         super().__init__()
         self.conditioner = conditioner
+        self.flow_type = flow_type
         self.ldim = ldim
         self.stats_ema_decay = stats_ema_decay
         self.dim = dim
@@ -86,11 +89,16 @@ class FlowLMModel(nn.Module):
         self.input_linear = nn.Linear(self.ldim, dim, bias=False, dtype=dtype)
         self.transformer = transformer
         self.out_norm = nn.LayerNorm(dim, eps=1e-5)
-        self.out_eos = nn.Linear(dim, 1, dtype=dtype)
+        self.z_proj = None if z_dim is None else nn.Linear(dim, z_dim, bias=False, dtype=dtype)
+        self.out_eos = nn.Linear(z_dim or dim, 1, dtype=dtype)
 
     @property
     def device(self) -> str:
         return next(self.parameters()).device.type
+
+    @property
+    def z_dim(self) -> int:
+        return self.dim if self.z_proj is None else self.z_proj.out_features
 
     def forward(
         self,
@@ -135,6 +143,8 @@ class FlowLMModel(nn.Module):
         else:
             torch.nn.init.trunc_normal_(noise, mean=0.0, std=std, a=-noise_clamp, b=noise_clamp)
         conditioned_flow = partial(self.flow_net, transformer_out)
+        if self.flow_type == "drifting":
+            return conditioned_flow(noise), out_eos
         return lsd_decode(conditioned_flow, noise, lsd_decode_steps), out_eos
 
     def backbone(
@@ -153,6 +163,8 @@ class FlowLMModel(nn.Module):
             transformer_out = self.out_norm(transformer_out)
         # remove the prefix from the model outputs (condition is prepended)
         transformer_out = transformer_out[:, -sequence.shape[1] :]
+        if self.z_proj is not None:
+            transformer_out = self.z_proj(transformer_out)
         return transformer_out
 
     def _sample_next_latent(
@@ -193,7 +205,7 @@ class FlowLMModel(nn.Module):
         cls, config: FlowLMConfig, latent_dim: int, insert_bos_before_voice: bool
     ) -> Self:
         d_model = config.transformer.d_model
-        flow_mlp = SimpleMLPAdaLN.from_pydantic_config(config, latent_dim, d_model)
+        flow_mlp = SimpleMLPAdaLN.from_pydantic_config(config, latent_dim, config.z_dim or d_model)
 
         conditioner = LUTConditioner(
             n_bins=config.lookup_table.n_bins,
@@ -212,4 +224,6 @@ class FlowLMModel(nn.Module):
             ldim=latent_dim,
             dtype=getattr(torch, config.dtype),
             insert_bos_before_voice=insert_bos_before_voice,
+            flow_type=config.flow.type,
+            z_dim=config.z_dim,
         )

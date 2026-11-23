@@ -21,11 +21,9 @@ from pocket_tts.conditioners.base import TokenizedText
 from pocket_tts.data.audio import audio_read
 from pocket_tts.data.audio_utils import convert_audio
 from pocket_tts.default_parameters import (
-    DEFAULT_EOS_THRESHOLD,
     DEFAULT_LANGUAGE,
     DEFAULT_LSD_DECODE_STEPS,
     DEFAULT_NOISE_CLAMP,
-    DEFAULT_TEMPERATURE,
     MAX_TOKEN_PER_CHUNK,
 )
 from pocket_tts.models.flow_lm import FlowLMModel
@@ -166,9 +164,9 @@ class TTSModel(nn.Module):
 
         mimi_config = config.mimi.model_dump()
         encoder = SEANetEncoder(**mimi_config["seanet"])
-        decoder = SEANetDecoder(**mimi_config["seanet"])
+        decoder = SEANetDecoder(**(mimi_config["decoder_seanet"] or mimi_config["seanet"]))
         encoder_transformer = mimi_transformer.ProjectedTransformer(**mimi_config["transformer"])
-        decoder_transformer = mimi_transformer.ProjectedTransformer(**mimi_config["transformer"])
+        decoder_transformer = mimi_transformer.ProjectedTransformer(**(mimi_config["decoder_transformer"] or mimi_config["transformer"]))
         quantizer = DummyQuantizer(**mimi_config["quantizer"])
 
         tts_model.mimi = MimiModel(
@@ -231,12 +229,13 @@ class TTSModel(nn.Module):
         cls,
         language: str | None = None,
         config: str | Path | None = None,
-        temp: float | int = DEFAULT_TEMPERATURE,
+        temp: float | int | None = None,
         lsd_decode_steps: int = DEFAULT_LSD_DECODE_STEPS,
         noise_clamp: float | int | None = DEFAULT_NOISE_CLAMP,
-        eos_threshold: float = DEFAULT_EOS_THRESHOLD,
+        eos_threshold: float | None = None,
         quantize: bool = False,
     ) -> Self:
+        """Load a model. `temp` and `eos_threshold` fall back to the config values when None."""
         if config is not None and language is not None:
             raise ValueError("Cannot specify both config and language.")
 
@@ -252,6 +251,10 @@ class TTSModel(nn.Module):
                 config_path = CONFIGS_DIR / f"{config_path}.yaml"
 
         loaded_config = load_config(config_path)
+        if temp is None:
+            temp = loaded_config.default_temperature
+        if eos_threshold is None:
+            eos_threshold = loaded_config.default_eos_threshold
         logger.info("Loading model from config at %s...", config_path)
 
         tts_model = cls._from_pydantic_config_with_weights(
